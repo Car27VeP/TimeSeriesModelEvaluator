@@ -86,7 +86,24 @@ plt.show()
 En la gráfica podemos obsservar la cantoidad de viajes regitrados
 de los días de marzo a agosto. Además suavizamos con promedio móvil la gráfica.
 """
-# %% 
+# %%
+## Tendencia, estacionalidad y residuales.
+# %%
+decomposed = seasonal_decompose(df['num_orders'])
+
+plt.figure(figsize=(14, 20))
+
+plt.subplot(311)
+decomposed.trend.plot(ax=plt.gca())
+plt.title('Tendencia')
+plt.subplot(312)
+decomposed.seasonal.plot(ax=plt.gca())
+plt.title('Estacionalidad')
+plt.subplot(313)
+decomposed.resid.plot(ax=plt.gca())
+plt.title('Residuales')
+# %% [markdoown]
+### Hacer los datos mas estacionarios.
 # %% [markdown]
 ## 3. Formación
 # %% [markdown]
