@@ -31,7 +31,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import mean_absolute_error as mae
 from sklearn.model_selection import train_test_split
-from sklearn.tree import DecisionTreeClassifier
+from sklearn.tree import DecisionTreeRegressor
 
 import catboost as cb
 from lightgbm import LGBMRegressor
@@ -68,15 +68,17 @@ plt.show()
 """
 En la descripción estadística observamos que
 los datos se encuentran ligeramente sesgados a la derecha; 
-sin embargo no es problema para seguir adelante. El número de viajes totales fueron de 26 496, hubo resgistro hubo cero viajes 
-y la cantidad máxima de viajes en una hora y día específico fueron de 119.
+sin embargo, no es un problema para seguir adelante. El número total de viajes fue de 26,496, 
+hubo registros con cero viajes, 
+y la cantidad máxima de viajes en una hora y día específicos fue de 119.
 """
 # %% [markdown]
 ### Cambiar formato fecha y hacer remuestreo por una hora.
 # %%
 df_taxi['datetime'] = pd.to_datetime(df_taxi['datetime'])
-df = df_taxi.set_index('datetime')
-df = df.resample('1D').sum()
+df_taxi = df_taxi.set_index('datetime')
+df_taxi = df_taxi.resample('1D').sum()
+df = df_taxi.copy()
 # %%
 df['rolling_mean'] = df['num_orders'].rolling(5).mean()
 df.plot(title="Viajes de marzo a agosto del 2018.")
@@ -102,12 +104,108 @@ plt.title('Estacionalidad')
 plt.subplot(313)
 decomposed.resid.plot(ax=plt.gca())
 plt.title('Residuales')
-# %% [markdoown]
+# %% [markdown]
 ### Hacer los datos mas estacionarios.
+# %%
+data = df[['num_orders']]
+data -= data.shift()
+
+data['mean'] = data['num_orders'].rolling(15).mean()
+data['std'] = data['num_orders'].rolling(15).std()
+
+data.plot(title='Datos más estacionarios.')
+plt.show()
 # %% [markdown]
 ## 3. Formación
+# %%
+data = data.drop(["mean","std"],axis=1)
+train, test = train_test_split(data, test_size=0.1, shuffle=False)
+print(train.shape)
+print(test.shape)
 # %% [markdown]
 ## Prueba
+# %% [markdown]
+### Pruebas de cordura.
+# %% [markdown]
+### Método 1.
+# %%
+print(f"Viajes medios al día: {data['num_orders'].median()}")
+pred_median = np.ones(test.shape) * data['num_orders'].median()
+print('EAM:', mae(test,pred_median))
+# %% [markdown]
+### Método 2.add()
+print(f"Viajes medios al día: {data['num_orders'].median()}")
+pred_previous = test.shift()
+pred_previous.iloc[0] = train.iloc[-1]
+print('EAM:', mae(test,pred_previous))
+# %% [markdown]
+"""
+Nuestras prueba de cordura tuvieron un error demasiado grande, no les fue nada bien. 
+En los siguientes modelos haremos que este valor sea menor.
+"""
+# %% [markdown]
+### Creación de características para los modelos.
+# %% 
+def make_features(data, max_lag, rolling_mean_size):
+    data['year'] = data.index.year
+    data['month'] = data.index.month
+    data['day'] = data.index.day
+    data['dayofweek'] = data.index.dayofweek
+
+    for lag in range(1, max_lag + 1):
+        data['lag_{}'.format(lag)] = data['num_orders'].shift(lag)
+
+    data['rolling_mean'] = (
+        data['num_orders'].shift().rolling(rolling_mean_size).mean()
+    )
+
+make_features(data,4,4)
+# data_features = data.drop('num_orders',axis=1)
+# data_target = data['num_orders']
+train, test = train_test_split(data, 
+                               test_size=0.1, 
+                               shuffle=False, 
+                               random_state=1234)
+train = train.dropna()
+
+
+features_train = train.drop(['num_orders'], axis=1)
+target_train = train['num_orders']
+features_test = test.drop(['num_orders'], axis=1)
+target_test = test['num_orders']
+#%%
+target_train.shape
+# %% [markdown]
+### Regresión Logistica.
+model = LogisticRegression(random_state=1234)
+model.fit(features_train,target_train)
+pred_train = model.predict(features_train)
+pred_test = model.predict(features_test)
+
+print(
+    'EAM para el conjunto de entrenamiento:', 
+    mae(target_train, pred_train)
+)
+print('EAM para el conjunto de prueba:', 
+      mae(target_test, pred_test))
+# %% [markdown]
+### Árboles de Decisión
+# %%
+mae_list = []
+for x in range(30):
+    print(f"\nIteración {x+1}")
+    model = DecisionTreeRegressor(max_depth=x+1,
+                                  random_state=1234)
+    model.fit(features_train,target_train)
+    pred_train = model.predict(features_train)
+    pred_test = model.predict(features_test)
+        
+    mae_list.append(mae(target_test, pred_test))
+mae_list = np.array(mae_list)
+
+plt.plot(mae_list)
+plt.title("MAE con 30 iteraciones")
+plt.show()
 # %% [markdown]
 # Lista de revisión
 # %% [markdown]
