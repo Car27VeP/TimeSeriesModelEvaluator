@@ -19,17 +19,19 @@ Los datos se almacenan en el archivo `taxi.csv`.
 El número de pedidos está en la columna `num_orders`.
 """
 # %% [markdown]
-## 1. Preparacion
+# 1. Preparacion
 # %%
+from skopt import BayesSearchCV
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import seaborn as sns
 from statsmodels.tsa.seasonal import seasonal_decompose
 
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestRegressor, AdaBoostRegressor
+from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error as mae
+from sklearn.metrics import root_mean_squared_error as rmse
+from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.tree import DecisionTreeRegressor
 
@@ -37,14 +39,14 @@ from catboost import CatBoostRegressor
 from lightgbm import LGBMRegressor
 from xgboost import XGBRegressor
 # %% [markdown]
-### Carga de los datos.
-# %% 
+# Carga de los datos.
+# %%
 df_taxi = pd.read_csv(r'../../../datasets/taxi.csv')
-#num_orders = pd.read_csv(r'../../../datasets/num_orders.csv')
+# num_orders = pd.read_csv(r'../../../datasets/num_orders.csv')
 # %% [markdown]
-## 2. Análisis
+# 2. Análisis
 # %% [markdown]
-### Observación general de los datos.
+# Observación general de los datos.
 # %%
 df_taxi.head()
 # %%
@@ -58,11 +60,11 @@ cambiar esta columna al formato correspondiente. También observamos el número 
 cada 10 minutos. 
 """
 # %% [markdown]
-### Obervación estadística de los datos.
+# Obervación estadística de los datos.
 # %%
 df_taxi.describe()
 # %%
-df_taxi.plot(kind='box',title='Distribución de los viajes.')
+df_taxi.plot(kind='box', title='Distribución de los viajes.')
 plt.show()
 # %% [markdown]
 """
@@ -73,15 +75,13 @@ hubo registros con cero viajes,
 y la cantidad máxima de viajes en una hora y día específicos fue de 119.
 """
 # %% [markdown]
-### Cambiar formato fecha y hacer remuestreo por una hora.
+# Cambiar formato fecha y hacer remuestreo por una hora.
 # %%
 df_taxi['datetime'] = pd.to_datetime(df_taxi['datetime'])
 df_taxi = df_taxi.set_index('datetime')
 df_taxi = df_taxi.resample('1D').sum()
 df = df_taxi.copy()
-# %%
-df['rolling_mean'] = df['num_orders'].rolling(5).mean()
-df.plot(title="Viajes de marzo a agosto del 2018.")
+df['num_orders'].rolling(5).mean().plot(title="Viajes de marzo a agosto del 2018.")
 plt.show()
 # %% [markdown]
 """
@@ -89,7 +89,7 @@ En la gráfica podemos obsservar la cantoidad de viajes regitrados
 de los días de marzo a agosto. Además suavizamos con promedio móvil la gráfica.
 """
 # %%
-## Tendencia, estacionalidad y residuales.
+# Tendencia, estacionalidad y residuales.
 # %%
 decomposed = seasonal_decompose(df['num_orders'])
 
@@ -105,9 +105,9 @@ plt.subplot(313)
 decomposed.resid.plot(ax=plt.gca())
 plt.title('Residuales')
 # %% [markdown]
-### Hacer los datos mas estacionarios.
+# Hacer los datos mas estacionarios.
 # %%
-data = df[['num_orders']]
+data = df[['num_orders']].copy()
 data -= data.shift()
 
 data['mean'] = data['num_orders'].rolling(15).mean()
@@ -115,37 +115,41 @@ data['std'] = data['num_orders'].rolling(15).std()
 
 data.plot(title='Datos más estacionarios.')
 plt.show()
+# %% ['markdown]
+### Escalar datos.
+scaler = StandardScaler()
+scaled_df = scaler.fit_transform(df)
 # %% [markdown]
-## 3. Formación
+# Funciones.
 # %%
-data = data.drop(["mean","std"],axis=1)
-train, test = train_test_split(data, test_size=0.1, shuffle=False)
-print(train.shape)
-print(test.shape)
-# %% [markdown]
-## Prueba
-# %% [markdown]
-### Pruebas de cordura.
-# %% [markdown]
-### Método 1.
-# %%
-print(f"Viajes medios al día: {data['num_orders'].median()}")
-pred_median = np.ones(test.shape) * data['num_orders'].median()
-print('EAM:', mae(test,pred_median))
-# %% [markdown]
-### Método 2.add()
-print(f"Viajes medios al día: {data['num_orders'].median()}")
-pred_previous = test.shift()
-pred_previous.iloc[0] = train.iloc[-1]
-print('EAM:', mae(test,pred_previous))
-# %% [markdown]
-"""
-Nuestras prueba de cordura tuvieron un error demasiado grande, no les fue nada bien. 
-En los siguientes modelos haremos que este valor sea menor.
-"""
-# %% [markdown]
-### Creación de características para los modelos.
-# %% 
+# Gráfica promedio movil
+def grafica_promedio_movil(data, predictions, target_train, target_test, title=''):
+    pred_test = pd.Series(predictions, target_test.index)
+    train_with_predictions = pd.concat([target_train, pred_test])
+
+    train_predictions_rolling = train_with_predictions.rolling(15).mean()
+    df_rolling = data['num_orders'].rolling(15).mean()
+
+    plt.title(title)
+    plt.plot(df_rolling, label="Datos originales")
+    plt.plot(train_predictions_rolling.loc[test.index],
+             label="Predicción")
+    plt.legend()
+    plt.show()
+# Grafica RMSE
+
+
+def grafica_rmse(rmse_list, title=''):
+    plt.plot(rmse_list)
+    plt.plot(np.argmin(rmse_list), np.min(rmse_list),
+             marker='*', markersize=15,
+             label=f"Mejor RMSE: {np.min(rmse_list):.2f}")
+    plt.title(title)
+    plt.legend()
+    plt.show()
+# Creación de características para los modelos.
+
+
 def make_features(data, max_lag, rolling_mean_size):
     data['year'] = data.index.year
     data['month'] = data.index.month
@@ -159,171 +163,396 @@ def make_features(data, max_lag, rolling_mean_size):
         data['num_orders'].shift().rolling(rolling_mean_size).mean()
     )
 
-make_features(data,4,4)
+
+# %% [markdown]
+# 3. Formación
+# %%
+train, test = train_test_split(scaled_df, test_size=0.1, shuffle=False)
+print(train.shape)
+print(test.shape)
+# %% [markdown]
+# Prueba
+# %% [markdown]
+# Pruebas de cordura.
+# %% [markdown]
+# Método 1.
+# %%
+print(f"Viajes medios al día: {np.median(df)}")
+pred_median = np.ones(test.shape) * np.median(train)
+print('RMSE:', rmse(test, pred_median))
+# %% [markdown]
+# Método 2.
+print(f"Viajes medios al día: {np.median(df)}")
+pred_previous = pd.DataFrame(test).shift()
+pred_previous.iloc[0] = pd.DataFrame(train).iloc[-1]
+print('RMSE:', rmse(test, pred_previous))
+# %% [markdown]
+"""
+Nuestras prueba de cordura tuvieron un error demasiado grande, no les fue nada bien. 
+En los siguientes modelos haremos que este valor sea menor.
+"""
+# %% [markdown]
+make_features(df, 6, 10)
 # data_features = data.drop('num_orders',axis=1)
 # data_target = data['num_orders']
-train, test = train_test_split(data, 
-                               test_size=0.1, 
-                               shuffle=False, 
+train, test = train_test_split(df,
+                              test_size=0.1,
+                               shuffle=False,
                                random_state=1234)
 train = train.dropna()
 
 
 features_train = train.drop(['num_orders'], axis=1)
-target_train = train['num_orders']
+target_train = train[['num_orders']]
 features_test = test.drop(['num_orders'], axis=1)
-target_test = test['num_orders']
-# %% [markdown]
-### Regresión Logistica.
+target_test = test[['num_orders']]
+print(features_train.shape)
+print(target_train.shape)
+print(features_test.shape)
+print(target_test.shape)
+scaler = StandardScaler()
+features_train_scaled = scaler.fit_transform(features_train)
+target_train_scaled = scaler.fit_transform(target_train)
+features_test_scaled = scaler.fit_transform(features_test)
+target_test_scaled = scaler.fit_transform(target_test)
 # %%
-model = LogisticRegression(random_state=1234)
-model.fit(features_train,target_train)
-pred_train = model.predict(features_train)
-pred_test = model.predict(features_test)
+# %% [markdown]
+# Regresión Lineal.
+# %%
+model = LinearRegression()
+model.fit(features_train_scaled, target_train)
+pred_train = model.predict(features_train_scaled)
+pred_test = model.predict(features_test_scaled)
 
 print(
-    'EAM para el conjunto de entrenamiento:', 
-    mae(target_train, pred_train)
+    'RMSE para el conjunto de entrenamiento:',
+    rmse(target_train_scaled, pred_train)
 )
-print('EAM para el conjunto de prueba:', 
-      mae(target_test, pred_test))
-
-# %%
-pred_test = pd.Series(pred_test,index=target_test.index)
-train_with_predictions = pd.concat([target_train,pred_test])
-
-train_predictions_rolling = train_with_predictions.rolling(15).mean()
-df_rolling = data['num_orders'].rolling(15).mean()
-
-plt.title("Promedio movil predicción.")
-plt.plot(df_rolling, 
-         label="Datos originales")
-plt.plot(train_predictions_rolling.loc[test.index], 
-         label="Predicción")
-plt.legend()
-plt.show()
-# %%
+print('RMSE para el conjunto de prueba:', rmse(target_test_scaled, pred_test))
+#grafica_promedio_movil(data, pred_test, target_train,
+#                       target_test, title="Promedio movil predición con Regresión Lineal.")
 # %% [markdown]
-### Árboles de Decisión
+# Árboles de Decisión
 # %%
-mae_list = []
+rmse_list = []
 pred_test_list = []
 
 for x in range(30):
     model = DecisionTreeRegressor(max_depth=x+1,
                                   random_state=1234)
-    model.fit(features_train,target_train)
-    
-    pred_train = model.predict(features_train)
-    pred_test = model.predict(features_test)
-      
-    mae_list.append(mae(target_test, pred_test))
+    model.fit(features_train_scaled, target_train_scaled)
+
+    pred_train = model.predict(features_train_scaled)
+    pred_test = model.predict(features_test_scaled)
+
+    rmse_list.append(rmse(target_test_scaled, pred_test))
     pred_test_list.append(np.array(pred_test))
-    
-mae_list = np.array(mae_list)
+rmse_list = np.array(rmse_list)
 pred_test_list = np.array(pred_test_list)
 # %%
-plt.plot(mae_list)
-plt.plot(np.argmin(mae_list),np.min(mae_list), 
-         marker='*', markersize=15,
-         label=f"Mejor MAE: {np.min(mae_list):.2f}")
-plt.title("MAE Árboles con 30 iteraciones")
-plt.legend()
-plt.show()
+grafica_rmse(rmse_list, title="RMSE Árboles con 30 iteraciones")
+# grafica_promedio_movil(data, pred_test, target_train,
+#                        target_test, title="Promedio móvil predicción con Árboles")
 # %%
-pred_test = pd.Series(pred_test_list[np.argmin(mae_list)-1],index=target_test.index)
-train_with_predictions = pd.concat([target_train,pred_test])
-
-train_predictions_rolling = train_with_predictions.rolling(15).mean()
-df_rolling = data['num_orders'].rolling(15).mean()
-
-plt.title("Promedio movil predicción con Árboles.")
-plt.plot(df_rolling, 
-         label="Datos originales")
-plt.plot(train_predictions_rolling.loc[test.index], 
-         label="Predicción")
-plt.legend()
-plt.show()
+# Random Forest
 # %%
-### Random Forest
-# %%
-mae_list = []
+rmse_list = []
 pred_test_list = []
 for x in range(30):
     model = RandomForestRegressor(random_state=12345,
                                   criterion='absolute_error',
                                   max_depth=x+1)
-    model.fit(features_train,target_train)
-    
+    model.fit(features_train_scaled, target_train_scaled)
+
     pred_test = model.predict(features_test)
-    
-    mae_list.append(mae(target_test, pred_test))
+
+    rmse_list.append(mae(target_test_scaled, pred_test))
     pred_test_list.append(np.array(pred_test))
-    
-mae_list = np.array(mae_list)
+
+rmse_list = np.array(rmse_list)
 pred_test_list = np.array(pred_test_list)
 # %%
-plt.plot(mae_list)
-plt.plot(np.argmin(mae_list),np.min(mae_list), 
-         marker='*', markersize=15,
-         label=f"Mejor MAE: {np.min(mae_list):.2f}")
-plt.title("MAE Random Forest con 30 iteraciones")
-plt.legend()
-plt.show()
-# %%
-pred_test = pd.Series(pred_test_list[np.argmin(mae_list)-1],index=target_test.index)
-train_with_predictions = pd.concat([target_train,pred_test])
-
-train_predictions_rolling = train_with_predictions.rolling(15).mean()
-df_rolling = data['num_orders'].rolling(15).mean()
-
-plt.title("Promedio movil predicción con Random Forest.")
-plt.plot(df_rolling, 
-         label="Datos originales")
-plt.plot(train_predictions_rolling.loc[test.index], 
-         label="Predicción")
-plt.legend()
-plt.show()
-# %% CatBoost
+grafica_rmse(rmse_list, title="MAE Random Forest con 30 iteraciones.")
+# grafica_promedio_movil(data, pred_test_list[np.argmin(
+#     rmse_list)-1], target_train, target_test, title="Promedio movil predicción con Random Forest")
+# %% [markdown]
+# CatBoost
 model = CatBoostRegressor()
-parameters = {'depth' : [6,8,10],
-              'learning_rate' : [0.01, 0.05, 0.1],
-              'iterations'    : [30, 50, 100]
+parameters = {'depth': [6, 8, 10],
+              'learning_rate': [0.01, 0.05, 0.1],
+              'iterations': [30, 50, 100]
               }
 
-grid = GridSearchCV(estimator=model, param_grid = parameters, cv = 2, n_jobs=-1)
-grid.fit(features_train, target_train)
-# %%
+grid = GridSearchCV(estimator=model, param_grid=parameters, cv=2, n_jobs=-1)
+grid.fit(features_train_scaled, target_train_scaled)
+
 print(f"Los mejores parametros para CatBoost: {grid.best_params_}")
 # %%
 model = CatBoostRegressor(**grid.best_params_)
+model.fit(features_train_scaled, target_train_scaled)
+pred_test = model.predict(features_test_scaled)
+print(f"\nrmse Catboost: {rmse(target_test_scaled,pred_test)}")
+# %%
+# grafica_promedio_movil(df, pred_test, target_train,
+#                        target_test,
+#                        title="Promedio movil predicción con CatBoost.")
+# %% [markdown]
+# LGBMRegressor
+# Con optimización automatizada de hiperparámetros. Facilita la búsqueda del mejor hiperparametros para un modelo.
+model = LGBMRegressor()
+
+param_space = {
+    'max_depth': (3, 12),
+    'num_leaves': (20, 150),
+    'learning_rate': (1e-4, 1e-1, 'log-uniform'),
+    'min_data_in_leaf': (50, 300)
+}
+
+opt = BayesSearchCV(model, param_space, n_iter=50, cv=5, n_jobs=-1)
+opt.fit(features_train_scaled, target_train)
+
+print("Los mejores parametros para LightGBM: ", opt.best_params_)
+# %%
+print(target_train)
+# %%
+model = LGBMRegressor(metric='rmse')
+model.fit(features_train_scaled, target_train)
+pred_test = model.predict(features_test_scaled)
+print(F"RMSE LightGBM: {rmse(target_test,pred_test)}")
+# %%
+pred_test
+# %%
+grafica_promedio_movil(df, pred_test, target_train, target_test,
+                       title="Promedio móvil predicción con LightGBM")
+# %% [markdown]
+### XGBoost
+# %%
+# ! xgb_model = XGBRegressor()
+
+# Definir los parámetros a probar
+# param_grid = {
+#     'n_estimators': [100, 200, 500],
+#     'max_depth': [3, 4, 5, 6, 7, 8, 9, 10],
+#     'eta': [0.01, 0.1, 0.2],
+#     'subsample': [0.7, 0.8, 0.9],
+#     'colsample_bytree': [0.7, 0.8, 0.9],
+#     'alpha': [0, 0.1, 1],
+#     'lambda': [0, 0.1, 1]
+# }
+
+# Configurar GridSearchCV
+# !grid_search = GridSearchCV(estimator=xgb_model, param_grid=param_grid, cv=3, scoring='neg_mean_squared_error')
+
+# Ajustar el modelo
+# !grid_search.fit(features_train, target_train)
+
+# Imprimir los mejores parámetros
+# !print("Mejores parámetros encontrados:", grid_search.best_params_)
+# %%
+#grid_search.best_params_
+# %%
+# model =  XGBRegressor(**grid_search.best_params_)
+# model.fit(features_train, target_train)
+# pred_test = model.predict(features_test)
+# print(F"RMSE LightGBM: {rmse(target_test,pred_test)}")
+# %% [markdown]
+### AdaBoostRegressor 
+model = AdaBoostRegressor(DecisionTreeRegressor(max_depth=10),
+                          n_estimators=1700, 
+                          learning_rate=0.6, 
+                          loss='exponential', random_state=42)
+model.fit(features_train, target_train.values.ravel())
+pred_test = model.predict(features_test)
+print(f"RMSE AdaBooster: {rmse(target_test,pred_test)}")
+# %%
+### SVR
+from sklearn.svm import SVR
+model = SVR(C=1.0, epsilon=0.2)
 model.fit(features_train, target_train)
 pred_test = model.predict(features_test)
-print(f"\nMAE Catboost: {mae(target_test,pred_test)}")
+print(F"RMSE SVR: {rmse(target_test,pred_test)}")
 # %%
-pred_test = pd.Series(pred_test,index=target_test.index)
-train_with_predictions = pd.concat([target_train,pred_test])
+### TODO MLP
+from sklearn.neural_network import MLPRegressor
+model = MLPRegressor(alpha=0.3, learning_rate_init=0.001, random_state=1, max_iter=300)
+model.fit(features_train, target_train)
+# pred_test = model.predict(features_test)
+# print(F"RMSE MLP: {rmse(target_test,pred_test)}")
+# %%
+from sklearn.model_selection import cross_val_score
+scores = cross_val_score(model, features_train_scaled, target_train, cv=5, scoring='neg_root_mean_squared_error')
+print("RMSE promedio:", -scores.mean())
+# %%
+param_grid = {
+    'hidden_layer_sizes': [(50,), (100,), (100, 100)],
+    'activation': ['relu', 'tanh'],
+    'alpha': [0.0001, 0.001],
+    'learning_rate_init': [0.001, 0.01]
+}
 
-train_predictions_rolling = train_with_predictions.rolling(15).mean()
-df_rolling = data['num_orders'].rolling(15).mean()
+grid_search = GridSearchCV(MLPRegressor(random_state=1, max_iter=500), param_grid, cv=3, scoring='neg_root_mean_squared_error')
+grid_search.fit(features_train_scaled, target_train)
 
-plt.title("Promedio movil predicción con CatBoost.")
-plt.plot(df_rolling, 
-         label="Datos originales")
-plt.plot(train_predictions_rolling.loc[test.index], 
-         label="Predicción")
-plt.legend()
-plt.show()
+print("Mejores parámetros encontrados:", grid_search.best_params_)
+# %%
+model = MLPRegressor(** grid_search.best_params_)
+model.fit(features_train, target_train)
+pred_test = model.predict(features_test)
+print(F"RMSE MLP: {rmse(target_test,pred_test)}")
+# %% [markdown]
+### Lasso
+# %%
+from sklearn import linear_model
+model = linear_model.Lasso(alpha=0.1)
+model.fit(features_train, target_train)
+pred_test = model.predict(features_test)
+print(F"RMSE Lasso: {rmse(target_test,pred_test)}")
+# %% [markdown]
+from sklearn.linear_model import Ridge
+model = Ridge()
+param = {'alpha':[1e-15,1e-10,1e-8,1e-3,1e-2,1,5,10,20,30,35,40,45,50,55,100],
+         'solver' : ['auto', 'svd', 'cholesky', 'lsqr', 'sparse_cg', 'sag', 'saga']}
+grid_search = GridSearchCV(model, param, scoring='neg_mean_squared_error', cv=5)
+grid_search.fit(features_train, target_train)
+print("Best value for lambda : ",model.get_params())
+best_param = model.get_params()
+model = Ridge(**best_param)
+model.fit(features_train, target_train)
+pred_test = model.predict(features_test)
+print(F"RMSE Ridge: {rmse(target_test,pred_test)}")
+# %% [markdown]
+### ARDRegression
+# %%
+from sklearn import linear_model
+model = linear_model.ARDRegression(max_iter=800)
+model.fit(features_train, target_train)
+pred_test = model.predict(features_test)
+print(F"RMSE Ridge: {rmse(target_test,pred_test)}")
+# %% [markdown]
+### Poisson
+# %%
+from sklearn import linear_model
+model = linear_model.PoissonRegressor()
+model.fit(features_train, target_train.values.ravel())
+pred_test = model.predict(features_test)
+print(F"RMSE Poisson: {rmse(target_test,pred_test)}")
+# %% [markdown]
+### Perceptron
+# %%
+from sklearn.linear_model import Perceptron
+model = Perceptron(tol=1e-3, random_state=0, n_jobs=-1)
+model.fit(features_train, target_train.values.ravel())
+pred_test = model.predict(features_test)
+print(F"RMSE Poisson: {rmse(target_test,pred_test)}")
+# %% [markdown]
+### ElasticNetCV
+# %%
+from sklearn.linear_model import ElasticNetCV
+model =ElasticNetCV()
+model.fit(features_train, target_train.values.ravel())
+pred_test = model.predict(features_test)
+print(F"RMSE ElasticNetCV: {rmse(target_test,pred_test)}")
+# %% [markdown]
+### TODO: HuberRegressor
+# %%
+from sklearn.linear_model import HuberRegressor
+model = HuberRegressor(fit_intercept=False)
+model.fit(features_train, target_train.values.ravel())
+pred_test = model.predict(features_test)
+print(F"RMSE HuberRegressor: {rmse(target_test,pred_test)}")
+# %% [markdown]
+### RANSACRegressor
+# %%
+from sklearn.linear_model import RANSACRegressor
+model = RANSACRegressor()
+model.fit(features_train, target_train.values.ravel())
+pred_test = model.predict(features_test)
+print(f"RMSE RANSACRegressor: {rmse(target_test,pred_test)}")
+# %% [markdown]
+### KNeighborsRegressor
+# %%
+from sklearn.neighbors import KNeighborsRegressor
+model = KNeighborsRegressor(n_neighbors=30,weights='distance')
+model.fit(features_train, target_train.values.ravel())
+pred_test = model.predict(features_test)
+print(F"RMSE KNeighborsRegressor: {rmse(target_test,pred_test)}")
+# %% [markdown]
+### ExtraTreeRegressor
+# %%
+from sklearn.tree import ExtraTreeRegressor
+model = ExtraTreeRegressor(max_depth=1120,min_weight_fraction_leaf=0.2)
+model.fit(features_train, target_train)
+pred_test = model.predict(features_test)
+print(f"RMSE ExtraTreeRegressor: {rmse(target_test,pred_test)}")
+# %% [markdown]
+### HistGradientBoostingRegressor
+# %%
+from sklearn.ensemble import HistGradientBoostingRegressor
+model = HistGradientBoostingRegressor()
+model.fit(features_train, target_train)
+pred_test = model.predict(features_test)
+print(f"RMSE HistGradientBoostingRegressor: {rmse(target_test,pred_test)}")
+# %% [markdown]
+### StackingRegressor
+# %%
+from sklearn.ensemble import StackingRegressor
+from sklearn.linear_model import RidgeCV
+from sklearn.svm import LinearSVR
+estimators = [
+    ('lr', RidgeCV()),
+    ('svr', LinearSVR(random_state=42))
+]
+reg = StackingRegressor(
+    estimators=estimators,
+    final_estimator=RandomForestRegressor(n_estimators=50,
+                                          random_state=42)
+)
+reg.fit(features_train, target_train)
+pred_test = model.predict(features_test)
+print(f"RMSE StackingRegressor: {rmse(target_test,pred_test)}")
+# %% [markdown]
+### BayesianRidge()
 
+# %%
+from sklearn import linear_model
+model = linear_model.BayesianRidge(sample_weight=50)
+model.fit(features_train, target_train)
+pred_test = model.predict(features_test)
+print(f"RMSE BayesianRidge: {rmse(target_test,pred_test)}")
+
+# %% [markdown]
+### TheilSenRegressor
+# %% 
+from sklearn.linear_model import TheilSenRegressor
+model = TheilSenRegressor()
+model.fit(features_train, target_train)
+pred_test = model.predict(features_test)
+print(f"RMSE TheilSenRegressor: {rmse(target_test,pred_test)}")
+# %% [markdown]
+### TODO MultiTaskLassoCV
+# %%
+from sklearn.linear_model import MultiTaskLassoCV
+model = MultiTaskLassoCV(cv=2)
+model.fit(features_train, target_train)
+pred_test = model.predict(features_test)
+print(f"RMSE MultiTaskLassoCV: {rmse(target_test,pred_test)}")
+# %% [markdown]
+### SGDClassifier
+# %%
+from sklearn.linear_model import SGDClassifier
+model = SGDClassifier()
+model.fit(features_train, target_train)
+pred_test = model.predict(features_test)
+print(f"RMSE MultiTaskLassoCV: {rmse(target_test,pred_test)}")
 # %% [markdown]
 # Lista de revisión
 # %% [markdown]
 """
 - [x] Jupyter Notebook está abierto.
-- [ ]  El código no tiene errores
-- [ ]  Las celdas con el código han sido colocadas en el orden de ejecución.
-- [ ]  Los datos han sido descargados y preparados.
-- [ ]  Se ha realizado el paso 2: los datos han sido analizados
+- [x]  El código no tiene errores
+- [x]  Las celdas con el código han sido colocadas en el orden de ejecución.
+- [x]  Los datos han sido descargados y preparados.
+- [x]  Se ha realizado el paso 2: los datos han sido analizados
 - [ ]  Se entrenó el modelo y se seleccionaron los hiperparámetros
 - [ ]  Se han evaluado los modelos. Se expuso una conclusión
 - [ ]  La *RECM* para el conjunto de prueba no es más de 48"""
