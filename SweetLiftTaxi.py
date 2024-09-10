@@ -27,13 +27,13 @@ import pandas as pd
 import seaborn as sns
 from statsmodels.tsa.seasonal import seasonal_decompose
 
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import RandomForestRegressor
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import mean_absolute_error as mae
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.tree import DecisionTreeRegressor
 
-import catboost as cb
+from catboost import CatBoostRegressor
 from lightgbm import LGBMRegressor
 from xgboost import XGBRegressor
 # %% [markdown]
@@ -173,10 +173,9 @@ features_train = train.drop(['num_orders'], axis=1)
 target_train = train['num_orders']
 features_test = test.drop(['num_orders'], axis=1)
 target_test = test['num_orders']
-#%%
-target_train.shape
 # %% [markdown]
 ### Regresión Logistica.
+# %%
 model = LogisticRegression(random_state=1234)
 model.fit(features_train,target_train)
 pred_train = model.predict(features_train)
@@ -188,24 +187,134 @@ print(
 )
 print('EAM para el conjunto de prueba:', 
       mae(target_test, pred_test))
+
+# %%
+pred_test = pd.Series(pred_test,index=target_test.index)
+train_with_predictions = pd.concat([target_train,pred_test])
+
+train_predictions_rolling = train_with_predictions.rolling(15).mean()
+df_rolling = data['num_orders'].rolling(15).mean()
+
+plt.title("Promedio movil predicción.")
+plt.plot(df_rolling, 
+         label="Datos originales")
+plt.plot(train_predictions_rolling.loc[test.index], 
+         label="Predicción")
+plt.legend()
+plt.show()
+# %%
 # %% [markdown]
 ### Árboles de Decisión
 # %%
 mae_list = []
+pred_test_list = []
+
 for x in range(30):
-    print(f"\nIteración {x+1}")
     model = DecisionTreeRegressor(max_depth=x+1,
                                   random_state=1234)
     model.fit(features_train,target_train)
+    
     pred_train = model.predict(features_train)
     pred_test = model.predict(features_test)
-        
+      
     mae_list.append(mae(target_test, pred_test))
+    pred_test_list.append(np.array(pred_test))
+    
 mae_list = np.array(mae_list)
-
+pred_test_list = np.array(pred_test_list)
+# %%
 plt.plot(mae_list)
-plt.title("MAE con 30 iteraciones")
+plt.plot(np.argmin(mae_list),np.min(mae_list), 
+         marker='*', markersize=15,
+         label=f"Mejor MAE: {np.min(mae_list):.2f}")
+plt.title("MAE Árboles con 30 iteraciones")
+plt.legend()
 plt.show()
+# %%
+pred_test = pd.Series(pred_test_list[np.argmin(mae_list)-1],index=target_test.index)
+train_with_predictions = pd.concat([target_train,pred_test])
+
+train_predictions_rolling = train_with_predictions.rolling(15).mean()
+df_rolling = data['num_orders'].rolling(15).mean()
+
+plt.title("Promedio movil predicción con Árboles.")
+plt.plot(df_rolling, 
+         label="Datos originales")
+plt.plot(train_predictions_rolling.loc[test.index], 
+         label="Predicción")
+plt.legend()
+plt.show()
+# %%
+### Random Forest
+# %%
+mae_list = []
+pred_test_list = []
+for x in range(30):
+    model = RandomForestRegressor(random_state=12345,
+                                  criterion='absolute_error',
+                                  max_depth=x+1)
+    model.fit(features_train,target_train)
+    
+    pred_test = model.predict(features_test)
+    
+    mae_list.append(mae(target_test, pred_test))
+    pred_test_list.append(np.array(pred_test))
+    
+mae_list = np.array(mae_list)
+pred_test_list = np.array(pred_test_list)
+# %%
+plt.plot(mae_list)
+plt.plot(np.argmin(mae_list),np.min(mae_list), 
+         marker='*', markersize=15,
+         label=f"Mejor MAE: {np.min(mae_list):.2f}")
+plt.title("MAE Random Forest con 30 iteraciones")
+plt.legend()
+plt.show()
+# %%
+pred_test = pd.Series(pred_test_list[np.argmin(mae_list)-1],index=target_test.index)
+train_with_predictions = pd.concat([target_train,pred_test])
+
+train_predictions_rolling = train_with_predictions.rolling(15).mean()
+df_rolling = data['num_orders'].rolling(15).mean()
+
+plt.title("Promedio movil predicción con Random Forest.")
+plt.plot(df_rolling, 
+         label="Datos originales")
+plt.plot(train_predictions_rolling.loc[test.index], 
+         label="Predicción")
+plt.legend()
+plt.show()
+# %% CatBoost
+model = CatBoostRegressor()
+parameters = {'depth' : [6,8,10],
+              'learning_rate' : [0.01, 0.05, 0.1],
+              'iterations'    : [30, 50, 100]
+              }
+
+grid = GridSearchCV(estimator=model, param_grid = parameters, cv = 2, n_jobs=-1)
+grid.fit(features_train, target_train)
+# %%
+print(f"Los mejores parametros para CatBoost: {grid.best_params_}")
+# %%
+model = CatBoostRegressor(**grid.best_params_)
+model.fit(features_train, target_train)
+pred_test = model.predict(features_test)
+print(f"\nMAE Catboost: {mae(target_test,pred_test)}")
+# %%
+pred_test = pd.Series(pred_test,index=target_test.index)
+train_with_predictions = pd.concat([target_train,pred_test])
+
+train_predictions_rolling = train_with_predictions.rolling(15).mean()
+df_rolling = data['num_orders'].rolling(15).mean()
+
+plt.title("Promedio movil predicción con CatBoost.")
+plt.plot(df_rolling, 
+         label="Datos originales")
+plt.plot(train_predictions_rolling.loc[test.index], 
+         label="Predicción")
+plt.legend()
+plt.show()
+
 # %% [markdown]
 # Lista de revisión
 # %% [markdown]
