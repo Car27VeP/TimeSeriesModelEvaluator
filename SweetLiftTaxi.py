@@ -453,7 +453,8 @@ grafica_rmse(rmse_list,title="RMSE XGBoost con 30 iteraciones")
 - [x]  Las celdas con el código han sido colocadas en el orden de ejecución.
 - [x]  Los datos han sido descargados y preparados.
 - [x]  Se ha realizado el paso 2: los datos han sido analizados
-- [ ]  Se entrenó el modelo y se seleccionaron los hiperparámetros
-- [ ]  Se han evaluado los modelos. Se expuso una conclusión
-- [ ]  La *RECM* para el conjunto de prueba no es más de 48"""
+- [x]  Se entrenó el modelo y se seleccionaron los hiperparámetros
+- [ ]  Se han evaluado los modelos. Se expuso una conclusión.
+- [ ]  La *RECM* para el conjunto de prueba no es más de 48
+"""
 # %%
